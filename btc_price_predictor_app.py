@@ -2,78 +2,62 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-import datetime
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+from sklearn.linear_model import LinearRegression
 
 st.set_page_config(page_title="BTC Price Predictor", layout="wide")
 st.title("📈 Real-Time Bitcoin Price Predictor (5-Min Ahead)")
 
-# Fetch BTC 1-minute OHLCV data (last 60 minutes)
+# Function to fetch 1-minute BTCUSDT candles from Binance
 def fetch_binance_ohlcv():
     url = "https://api.binance.com/api/v3/klines"
     params = {
         "symbol": "BTCUSDT",
         "interval": "1m",
-        "limit": 60
+        "limit": 120  # last 2 hours
     }
     response = requests.get(url, params=params)
     data = response.json()
     df = pd.DataFrame(data, columns=[
         'timestamp', 'open', 'high', 'low', 'close', 'volume',
         'close_time', 'quote_asset_volume', 'number_of_trades',
-        'taker_buy_base_volume', 'taker_buy_quote_volume', 'ignore'])
-
+        'taker_buy_base_volume', 'taker_buy_quote_volume', 'ignore'
+    ])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     df.set_index('timestamp', inplace=True)
-    df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+    df = df[['close']].astype(float)
     return df
 
-# Simulate a trained LSTM model
-@st.cache_resource
-def create_dummy_model(input_shape):
-    model = Sequential()
-    model.add(LSTM(50, return_sequences=False, input_shape=input_shape))
-    model.add(Dense(1))
-    model.compile(optimizer='adam', loss='mse')
-    return model
+# Simple linear prediction model
+def predict_next_5min(prices):
+    prices = prices[-60:]  # last 60 minutes
+    X = np.arange(len(prices)).reshape(-1, 1)
+    y = prices.values.reshape(-1, 1)
+    model = LinearRegression()
+    model.fit(X, y)
+    future_index = np.array([[len(prices) + 5]])
+    prediction = model.predict(future_index)[0][0]
+    return prediction
 
-# Prepare data for LSTM
-def prepare_data(df):
-    scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df[['close']])
-
-    x = []
-    for i in range(len(scaled_data) - 60):
-        x.append(scaled_data[i:i+60])
-    x = np.array(x)
-    return x[-1:], scaler
-
-# MAIN
+# App logic
 try:
     df = fetch_binance_ohlcv()
-    st.subheader("Live BTC Price: $")
-    st.metric("Current Price", f"{df['close'].iloc[-1]:,.2f}")
 
+    st.subheader("Live BTC Price")
+    st.metric("Current Price", f"${df['close'].iloc[-1]:,.2f}")
     st.line_chart(df['close'])
 
-    x_input, scaler = prepare_data(df)
-    model = create_dummy_model((60, 1))
-    pred_scaled = model.predict(x_input)
-    predicted_price = scaler.inverse_transform(pred_scaled)[0][0]
+    predicted_price = predict_next_5min(df['close'])
 
-    st.subheader("Predicted BTC Price (5 min later):")
+    st.subheader("Predicted BTC Price (5 minutes ahead)")
     st.success(f"${predicted_price:,.2f}")
 
-    st.subheader("Prediction vs Current")
     fig, ax = plt.subplots()
-    ax.plot([0, 1], [df['close'].iloc[-1], predicted_price], marker='o')
-    ax.set_xticks([0, 1])
-    ax.set_xticklabels(['Now', 'In 5 min'])
-    ax.set_title("Price Prediction")
+    ax.plot(df['close'][-60:], label="Last 60 min")
+    ax.axhline(predicted_price, color="red", linestyle="--", label="5-min Forecast")
+    ax.set_title("BTC Price Prediction")
+    ax.legend()
     st.pyplot(fig)
 
 except Exception as e:
-    st.error(f"Failed to fetch or process data: {e}")
+    st.error(f"An error occurred: {e}")
